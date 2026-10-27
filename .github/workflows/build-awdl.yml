@@ -58,43 +58,61 @@ jobs:
         run: |
           set -euo pipefail
           D=src/build/Build/Products/Release
-          echo "=== 产物 ==="
+          echo "=== Release 目录 ==="
           ls -1 "$D"
           echo
+          echo "=== 定位所有 kext ==="
+          find "$D" -maxdepth 4 -name "*.kext" -type d | sort | tee /tmp/kexts.txt
+          echo
           echo "=== 各变体明细 ==="
-          for kext in "$D"/*.kext; do
+          while IFS= read -r kext; do
             bin="$kext/Contents/MacOS/AirportItlwm"
             [ -f "$bin" ] || continue
-            printf "%-34s %12s B  %-10s CFBundleVersion=%s\n" \
-              "$(basename "$kext")" "$(stat -f %z "$bin")" "$(lipo -archs "$bin")" \
+            printf "%-22s %-30s %12s B %-8s v=%s\n" \
+              "$(basename "$(dirname "$kext")")" "$(basename "$kext")" \
+              "$(stat -f %z "$bin")" "$(lipo -archs "$bin")" \
               "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$kext/Contents/Info.plist" 2>/dev/null || echo '?')"
-          done
+          done < /tmp/kexts.txt
           echo
-          echo "=== 断言 1：所有变体必须是 x86_64 ==="
-          for bin in "$D"/*.kext/Contents/MacOS/AirportItlwm; do
+          echo "=== 断言 1：所有变体必须是 x86_64 且含 Info.plist ==="
+          while IFS= read -r kext; do
+            bin="$kext/Contents/MacOS/AirportItlwm"
+            [ -f "$bin" ] || { echo "::error::$kext 缺二进制"; exit 1; }
+            [ -f "$kext/Contents/Info.plist" ] || { echo "::error::$kext 缺 Info.plist"; exit 1; }
             archs="$(lipo -archs "$bin")"
             case "$archs" in *x86_64*) ;; *) echo "::error::$bin 架构为 $archs，不是 x86_64"; exit 1;; esac
-          done
+          done < /tmp/kexts.txt
           echo "全部 x86_64 ✔"
-          echo "=== 断言 2：补丁必须真的编进二进制 ==="
-          if ! strings "$D/AirportItlwm_Ventura.kext/Contents/MacOS/AirportItlwm" | grep -q "failed to attach AWDL interface"; then
+          echo "=== 断言 2：补丁必须真的编进 Ventura 变体 ==="
+          VBIN="$(grep '/Ventura/' /tmp/kexts.txt | head -1)/Contents/MacOS/AirportItlwm"
+          echo "Ventura 二进制: $VBIN"
+          if ! strings "$VBIN" | grep -q "failed to attach AWDL interface"; then
             echo "::error::Ventura 变体里找不到补丁字符串，补丁没编进去"
             exit 1
           fi
           echo "Ventura 变体含 AWDL attach 逻辑 ✔"
 
-      - name: 打包
+      - name: 打包（按 OpenCore 命名：AirportItlwm_<变体>.kext）
         run: |
           set -euo pipefail
-          D=src/build/Build/Products/Release
-          mkdir -p out
-          cd "$D"
-          for kext in *.kext; do
-            zip -qry "$GITHUB_WORKSPACE/out/${kext%.kext}-awdlfix.zip" "$kext"
-          done
-          cd "$GITHUB_WORKSPACE"
+          mkdir -p out stage
+          while IFS= read -r kext; do
+            variant="$(basename "$(dirname "$kext")")"
+            case "$variant" in
+              Ventura)     target="AirportItlwm_Ventura.kext" ;;
+              Monterey)    target="AirportItlwm_Monterey.kext" ;;
+              Sonoma14.0)  target="AirportItlwm_Sonoma.kext" ;;
+              Sonoma14.4)  target="AirportItlwm.kext" ;;
+              Mojave)      target="AirportItlwm_Mojave.kext" ;;
+              *)           target="AirportItlwm_${variant}.kext" ;;
+            esac
+            rm -rf "stage/$target"
+            cp -R "$kext" "stage/$target"
+            ( cd stage && zip -qry "$GITHUB_WORKSPACE/out/${target%.kext}-awdlfix.zip" "$target" )
+            echo "打包 $variant → ${target%.kext}-awdlfix.zip"
+          done < /tmp/kexts.txt
           cp awdl-fix.diff out/
-          shasum -a 256 out/* > out/SHA256SUMS.txt
+          ( cd out && shasum -a 256 * > SHA256SUMS.txt )
           ls -lh out
 
       - uses: actions/upload-artifact@v4

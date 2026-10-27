@@ -1,0 +1,6 @@
+本仓库包含的补丁脚本 `patches/enable-awdl.py` 与工作流是
+OpenIntelWireless/itlwm（GPL-2.0）的派生作品，同样以 **GPL-2.0** 授权发布。
+
+许可证全文：https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+
+驱动本体不在此仓库内 —— CI 每次从上游 master 现拉源码，仅在构建期打补丁。

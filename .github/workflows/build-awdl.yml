@@ -1,0 +1,104 @@
+name: build-awdl-airplay
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: 编译 AWDL 修复版 AirportItlwm（x86_64）
+    runs-on: macos-15-intel   # 唯一免费的 Intel runner；Air 是 i5-7200U，必须出 x86_64
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 拉取上游 itlwm 源码（master）
+        run: |
+          set -euo pipefail
+          curl -L --retry 5 --retry-delay 3 -sS -o itlwm.tar.gz \
+            https://github.com/OpenIntelWireless/itlwm/archive/refs/heads/master.tar.gz
+          tar xzf itlwm.tar.gz
+          mv itlwm-master src
+          git -C src init -q .
+          git -C src -c user.email=ci@local -c user.name=ci add -A
+          git -C src -c user.email=ci@local -c user.name=ci commit -qm upstream
+          echo "上游 commit: $(git -C src rev-parse --short HEAD)  文件数: $(git -C src ls-files | wc -l)"
+
+      - name: 打 AWDL 补丁（三重断言，幂等）
+        run: python3 patches/enable-awdl.py src
+
+      - name: 记录补丁 diff
+        run: |
+          set -euo pipefail
+          git -C src diff > awdl-fix.diff
+          echo "diff 行数: $(wc -l < awdl-fix.diff)"
+          cat awdl-fix.diff
+
+      - name: 安装 MacKernelSDK
+        run: git clone --depth=1 https://github.com/acidanthera/MacKernelSDK.git src/MacKernelSDK
+
+      - name: 环境信息
+        run: |
+          sw_vers
+          echo "宿主架构: $(uname -m)"
+          xcodebuild -version | head -2
+
+      - name: 编译 Release（全部变体）
+        working-directory: src
+        run: |
+          set -o pipefail
+          xcodebuild -scheme "AirportItlwm (all)" -configuration Release \
+            -derivedDataPath build GIT_COMMIT=_awdl 2>&1 | tail -50
+
+      - name: 产物清单 + 双断言（架构 / 补丁已编入）
+        run: |
+          set -euo pipefail
+          D=src/build/Build/Products/Release
+          echo "=== 产物 ==="
+          ls -1 "$D"
+          echo
+          echo "=== 各变体明细 ==="
+          for kext in "$D"/*.kext; do
+            bin="$kext/Contents/MacOS/AirportItlwm"
+            [ -f "$bin" ] || continue
+            printf "%-34s %12s B  %-10s CFBundleVersion=%s\n" \
+              "$(basename "$kext")" "$(stat -f %z "$bin")" "$(lipo -archs "$bin")" \
+              "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$kext/Contents/Info.plist" 2>/dev/null || echo '?')"
+          done
+          echo
+          echo "=== 断言 1：所有变体必须是 x86_64 ==="
+          for bin in "$D"/*.kext/Contents/MacOS/AirportItlwm; do
+            archs="$(lipo -archs "$bin")"
+            case "$archs" in *x86_64*) ;; *) echo "::error::$bin 架构为 $archs，不是 x86_64"; exit 1;; esac
+          done
+          echo "全部 x86_64 ✔"
+          echo "=== 断言 2：补丁必须真的编进二进制 ==="
+          if ! strings "$D/AirportItlwm_Ventura.kext/Contents/MacOS/AirportItlwm" | grep -q "failed to attach AWDL interface"; then
+            echo "::error::Ventura 变体里找不到补丁字符串，补丁没编进去"
+            exit 1
+          fi
+          echo "Ventura 变体含 AWDL attach 逻辑 ✔"
+
+      - name: 打包
+        run: |
+          set -euo pipefail
+          D=src/build/Build/Products/Release
+          mkdir -p out
+          cd "$D"
+          for kext in *.kext; do
+            zip -qry "$GITHUB_WORKSPACE/out/${kext%.kext}-awdlfix.zip" "$kext"
+          done
+          cd "$GITHUB_WORKSPACE"
+          cp awdl-fix.diff out/
+          shasum -a 256 out/* > out/SHA256SUMS.txt
+          ls -lh out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AirportItlwm-awdlfix-x86_64
+          path: out/
+          if-no-files-found: error

@@ -6,7 +6,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write   # 用于发布 Release（单个文件可直接下载，不用拉 120MB 的 artifact）
 
 jobs:
   build:
@@ -117,8 +117,51 @@ jobs:
             echo "打包 $variant → ${target%.kext}-awdlfix.zip"
           done < /tmp/kexts.txt
           cp awdl-fix.diff out/
-          ( cd out && shasum -a 256 * > SHA256SUMS.txt )
-          ls -lh out
+          ( cd out && shasum -a 256 * > SHA256SUMS.txt && ls -lh )
+          # 每个变体的二进制指纹，写进 Release 说明
+          {
+            echo "构建日期: $(date -u +%Y-%m-%dT%H:%MZ)"
+            echo "上游 commit: $(git -C src rev-parse --short HEAD)"
+            echo "Xcode: $(xcodebuild -version | head -1)"
+            echo "宿主架构: $(uname -m)"
+            echo
+            echo "| 变体 | 目标文件名 | 二进制大小 | CFBundleVersion |"
+            echo "|---|---|---|---|"
+          } > release-notes.md
+          while IFS= read -r kext; do
+            variant="$(basename "$(dirname "$kext")")"
+            bin="$kext/Contents/MacOS/AirportItlwm"
+            [ -f "$bin" ] || continue
+            case "$variant" in
+              Ventura)    t="AirportItlwm_Ventura.kext" ;;
+              Monterey)   t="AirportItlwm_Monterey.kext" ;;
+              Sonoma14.0) t="AirportItlwm_Sonoma.kext" ;;
+              Sonoma14.4) t="AirportItlwm.kext" ;;
+              Mojave)     t="AirportItlwm_Mojave.kext" ;;
+              *)          t="AirportItlwm_${variant// /}.kext" ;;
+            esac
+            echo "| $variant | \`$t\` | $(stat -f %z "$bin") B | $(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$kext/Contents/Info.plist") |" >> release-notes.md
+          done < /tmp/kexts.txt
+          {
+            echo
+            echo "**Ventura（macOS 13）用户只需下载 \`AirportItlwm_Ventura-awdlfix.zip\`**，解压后得到 \`AirportItlwm_Ventura.kext\`，按 README §5 替换。"
+            echo
+            echo "替换前请先备份原 kext（见 README §5.3 / §7 回滚）。"
+          } >> release-notes.md
+          cat release-notes.md
+
+      - name: 发布 Release（单个文件可直接下载）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="ci-$(date -u +%Y%m%d)-${{ github.run_number }}"
+          gh release create "$TAG" out/*.zip out/awdl-fix.diff out/SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "AWDL fix (x86_64) · $TAG" \
+            --notes-file release-notes.md \
+            --latest
+          echo "已发布: $(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url -q .url)"
 
       - uses: actions/upload-artifact@v4
         with:

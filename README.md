@@ -68,8 +68,11 @@ CI 做的事：拉上游 `master` → 打补丁 → 装 `MacKernelSDK` → `xcod
 
 ### 5.1 下载
 
-Actions → 最新一次 `build-awdl-airplay` → artifact `AirportItlwm-awdlfix-x86_64`。
-里面是 8 个 `*-awdlfix.zip`，每个解压得到一个 `.kext`。
+**推荐：** 打开 [Releases](../../releases/latest)，只下你需要的那一个 zip（每个约 15 MB）。
+macOS 13 用户下 **`AirportItlwm_Ventura-awdlfix.zip`**，解压得到 `AirportItlwm_Ventura.kext`。
+
+备选：Actions → 最近的 `build-awdl-airplay` → artifact `AirportItlwm-awdlfix-x86_64`
+（一次性打包 8 个变体，约 120 MB，不适合只想拿一个变体的情况）。
 
 ### 5.2 选对变体（**最容易翻车的一步**）
 
@@ -148,6 +151,20 @@ mv AirportItlwm_Ventura.<原版本>.bak AirportItlwm_Ventura.kext
 > ⚠️ CI 每次重新构建**不保证字节级相同**（Xcode 版本、时间戳、UUID 都会变），
 > 上面的指纹只用于「和当年那版已验证产物是不是同一份」的核对，不是 CI 产物的固定值。
 > 打完后先比对「行为判据」（§5.4）比比对哈希更可靠。
+
+### 最近一次 CI 构建（可对照）
+
+| 项 | 值 |
+|---|---|
+| workflow | `build-awdl-airplay`，run `40454176581`（绿） |
+| 上游 | `OpenIntelWireless/itlwm` master `f358cb3` |
+| 产物 | 8 个变体，全部 **x86_64**、`CFBundleVersion 2.4.0` |
+| Ventura 二进制 | **15,795,512 B** |
+| 补丁 diff | 10 行新增 / 6 行删除（仅有 `AirportSTAIOCTL.cpp`） |
+| 流水线自检 | 架构断言 ✔、Ventura 变体含 `failed to attach AWDL interface` ✔、diff 内容 ✔ |
+
+> 与 §8 的 2026-10-13 已验证产物（15,692,984 B / `f01d3569…`）**大小不同属正常** ——
+> 上游 master 与 Xcode 版本都前进了，**代码改动等价**，但二进制不再逐字节相同。
 
 ## 9. 风险与免责
 

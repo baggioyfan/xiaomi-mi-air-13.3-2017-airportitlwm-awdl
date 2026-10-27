@@ -86,11 +86,16 @@ jobs:
           echo "=== 断言 2：补丁必须真的编进 Ventura 变体 ==="
           VBIN="$(grep '/Ventura/' /tmp/kexts.txt | head -1)/Contents/MacOS/AirportItlwm"
           echo "Ventura 二进制: $VBIN"
-          if ! strings "$VBIN" | grep -q "failed to attach AWDL interface"; then
+          strings -a "$VBIN" > /tmp/vstr.txt     # 先落盘，避免管道被 grep -q 提前关闭导致 strings 报错
+          if ! grep -q "failed to attach AWDL interface" /tmp/vstr.txt; then
             echo "::error::Ventura 变体里找不到补丁字符串，补丁没编进去"
             exit 1
           fi
           echo "Ventura 变体含 AWDL attach 逻辑 ✔"
+          echo "=== 断言 3：源码 diff 必须是这次真正打上的 ==="
+          grep -q "inf->registerService();" awdl-fix.diff || { echo "::error::diff 里没有 registerService"; exit 1; }
+          grep -q "failed to attach AWDL interface" awdl-fix.diff || { echo "::error::diff 里没有 attach 检查"; exit 1; }
+          echo "diff 内容正确 ✔（$(grep -c '^+' awdl-fix.diff) 行新增 / $(grep -c '^-' awdl-fix.diff) 行删除）"
 
       - name: 打包（按 OpenCore 命名：AirportItlwm_<变体>.kext）
         run: |
@@ -104,7 +109,7 @@ jobs:
               Sonoma14.0)  target="AirportItlwm_Sonoma.kext" ;;
               Sonoma14.4)  target="AirportItlwm.kext" ;;
               Mojave)      target="AirportItlwm_Mojave.kext" ;;
-              *)           target="AirportItlwm_${variant}.kext" ;;
+              *)           target="AirportItlwm_${variant// /}.kext" ;;
             esac
             rm -rf "stage/$target"
             cp -R "$kext" "stage/$target"
